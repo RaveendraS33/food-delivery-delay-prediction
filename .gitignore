@@ -22,6 +22,7 @@ mlartifacts/
 models/*.joblib
 models/*.json
 models/*.pkl
+models/versions/
 data/raw/*
 data/processed/*
 !data/**/.gitkeep

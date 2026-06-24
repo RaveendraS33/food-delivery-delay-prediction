@@ -9,6 +9,7 @@ the *same* ``build_features`` used in training.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from delivery_delay.data.weather import WeatherClient, default_client
 from delivery_delay.features.build import build_features
 from delivery_delay.features.geo import haversine_km
 from delivery_delay.models.registry import ModelBundle, load_bundle
+
+logger = logging.getLogger(__name__)
 
 
 def _infer_traffic_level(hour: int, cfg: Config) -> str:
@@ -100,6 +103,12 @@ class DelayPredictor:
     def __init__(self, model_dir: str | Path | None = None, cfg: Config | None = None):
         self.cfg = cfg or load_config()
         self.bundle: ModelBundle = load_bundle(model_dir or self.cfg.model_dir)
+        logger.info(
+            "Loaded model bundle: %d features, trained %s (source=%s)",
+            len(self.bundle.feature_columns),
+            self.bundle.trained_at or "unknown",
+            self.bundle.source,
+        )
 
     def _risk_level(self, prob: float) -> str:
         high = self.bundle.high_risk_threshold

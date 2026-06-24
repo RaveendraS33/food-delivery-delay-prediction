@@ -181,6 +181,38 @@ def load_public(cfg: Config) -> pd.DataFrame | None:
         return None
 
 
+# Light range checks (warn-only) applied after the required-column gate.
+_RANGE_CHECKS = {
+    "restaurant_lat": (-90, 90),
+    "restaurant_lon": (-180, 180),
+    "customer_lat": (-90, 90),
+    "customer_lon": (-180, 180),
+    "prep_time_minutes": (0, 240),
+    "active_orders": (0, 200),
+    "weather_precip_mm": (0, 200),
+    "actual_minutes": (0, 600),
+}
+
+
+def validate_canonical(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate a canonical-schema frame: required columns (hard) + ranges (warn).
+
+    Raises ``ValueError`` if required columns are missing; logs a warning for any
+    out-of-range values but does not drop them (the generator clips, the public
+    loader fills/drops). Returns the frame unchanged so it can be used inline.
+    """
+    missing = [c for c in CANONICAL_COLUMNS if c not in df.columns]
+    if missing:
+        raise ValueError(f"Canonical frame missing required columns: {missing}")
+
+    for col, (lo, hi) in _RANGE_CHECKS.items():
+        series = pd.to_numeric(df[col], errors="coerce")
+        bad = int(((series < lo) | (series > hi)).sum())
+        if bad:
+            logger.warning("Column %s has %d value(s) outside [%s, %s]", col, bad, lo, hi)
+    return df
+
+
 def load_canonical(
     cfg: Config | None = None,
     source: str = "hybrid",
@@ -212,4 +244,5 @@ def load_canonical(
     else:
         raise ValueError(f"Unknown source: {source!r} (use synthetic|public|hybrid)")
 
+    validate_canonical(frame)
     return add_targets(frame, cfg)

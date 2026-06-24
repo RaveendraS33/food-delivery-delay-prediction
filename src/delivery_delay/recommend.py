@@ -8,10 +8,13 @@ decision-support layer behind the dashboard's "best time to order" feature.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from delivery_delay.config import Config, load_config
 from delivery_delay.models.predict import DelayPredictor
+
+logger = logging.getLogger(__name__)
 
 
 def recommend_order_time(
@@ -71,6 +74,13 @@ def recommend_order_time(
         )
         recommend_now = False
 
+    logger.info(
+        "Recommendation over %dh: now=%.0f%% best=%.0f%% @ +%dh",
+        lookahead,
+        current["delay_probability"] * 100,
+        best["delay_probability"] * 100,
+        best["offset_hours"],
+    )
     return {
         "recommend_now": recommend_now,
         "advice": advice,

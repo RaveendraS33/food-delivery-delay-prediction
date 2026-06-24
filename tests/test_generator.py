@@ -1,8 +1,11 @@
+import pytest
+
 from delivery_delay.data.generator import (
     CANONICAL_COLUMNS,
     add_targets,
     generate_orders,
 )
+from delivery_delay.data.loader import validate_canonical
 
 
 def test_schema_and_size(cfg):
@@ -28,3 +31,14 @@ def test_targets_and_delay_rate(cfg):
 def test_actual_minutes_positive(cfg):
     df = generate_orders(cfg, n_orders=1000, seed=5)
     assert (df["actual_minutes"] > 0).all()
+
+
+def test_validate_canonical_accepts_generated(cfg):
+    df = generate_orders(cfg, n_orders=200, seed=5)
+    assert validate_canonical(df) is df
+
+
+def test_validate_canonical_rejects_missing_column(cfg):
+    df = generate_orders(cfg, n_orders=50, seed=5).drop(columns=["customer_lat"])
+    with pytest.raises(ValueError, match="missing required columns"):
+        validate_canonical(df)

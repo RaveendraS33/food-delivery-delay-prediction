@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "End-to-end food delivery delay prediction: ETA regression + delay-probability classification with weather/geo/temporal features, FastAPI serving, and a Streamlit decision-support dashboard."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
 authors = [{ name = "Raveendra Sanapala" }]
 
 [tool.setuptools.packages.find]

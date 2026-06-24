@@ -54,24 +54,72 @@ cloud (see [Cloud-ready](#cloud-ready)).
 
 ---
 
-## Results
+## Results & validation
 
-Trained on 40,000 synthetic orders (hybrid source), 80/20 split:
+Evaluated on 40,000 orders (synthetic source), 80/20 split **stratified on the
+delay label**. Naive + linear baselines are included so the gains are
+*attributable, not assumed*. Full report and all diagnostic plots:
+**[docs/model_report.md](docs/model_report.md)** (regenerate with `python scripts/evaluate.py`).
 
-| Model | Metric | Score |
-|---|---|---|
-| **ETA regressor** | MAE | **2.1 min** |
-| | RMSE | 2.7 min |
-| | R² | **0.91** |
-| **Delay classifier** | ROC-AUC | **0.95** |
-| | PR-AUC | 0.89 |
-| | Brier score | 0.085 |
-| Dataset | base delay rate | 27% |
+**ETA regression**
 
-The models recover the intended structure — e.g. a long route at the **19:00
-dinner peak with a busy kitchen** scores **~92% delay risk**, while the **same
-route at 15:00 off-peak** scores **~3%**, and the recommender suggests shifting
-the order to a lower-risk slot.
+| Model | MAE (min) | RMSE (min) | R² |
+|---|---|---|---|
+| Mean baseline | 7.07 | 8.98 | 0.00 |
+| Linear regression | 2.23 | 2.81 | 0.902 |
+| **XGBoost** | **2.14** | **2.70** | **0.910** |
+
+**Delay classification**
+
+| Model | ROC-AUC | PR-AUC | Brier | F1@0.5 |
+|---|---|---|---|---|
+| Majority baseline | 0.500 | 0.276 | 0.276 | 0.00 |
+| Logistic regression | 0.956 | 0.906 | 0.084 | 0.803 |
+| **XGBoost** | **0.954** | 0.898 | **0.082** | **0.808** |
+
+**5-fold cross-validation (XGBoost):** ETA MAE **2.14 ± 0.01** min · R² **0.910 ± 0.002** ·
+delay ROC-AUC **0.951 ± 0.001** — the tiny variance rules out a lucky split.
+
+> A linear/logistic baseline is already strong here (the relationships are fairly
+> smooth), so XGBoost is chosen for its better calibration, F1, and capture of
+> interactions (peak × load, distance × rain) — the comparison keeps that choice honest.
+
+<table>
+  <tr>
+    <td><img src="docs/img/feature_importance.png" width="390" alt="feature importance"></td>
+    <td><img src="docs/img/shap_summary.png" width="390" alt="SHAP summary"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/img/delay_calibration.png" width="390" alt="calibration curve"></td>
+    <td><img src="docs/img/delay_rate_by_hour.png" width="390" alt="delay rate by hour"></td>
+  </tr>
+</table>
+
+**Sanity check.** A long route at the **19:00 dinner peak with a busy kitchen**
+scores **~92% delay risk**; the **same route at 15:00 off-peak** scores **~3%**,
+and the recommender suggests the lower-risk slot.
+
+### Operating point (cost-aware)
+
+Errors aren't symmetric — a **missed delay** (SLA breach / refund / lost trust)
+is costlier than a **false alarm** (a proactive nudge or padded ETA). Weighting a
+false negative at **5×** a false positive and sweeping the threshold to minimise
+expected cost/order moves the operating point to **0.25** (vs the naive 0.50):
+**recall 0.94**, precision 0.63. The weights live in `scripts/evaluate.py` — set
+them to your real economics. Hyperparameters are confirmed by a randomized search
+([docs/tuning_report.md](docs/tuning_report.md)); the config defaults are already near-optimal.
+
+![](docs/img/threshold_sweep.png)
+
+### Validation & leakage controls
+- 80/20 split **stratified** on `is_delayed`; headline metrics confirmed by 5-fold CV.
+- **Train/serve parity** — one `build_features` path, categoricals one-hot encoded
+  against fixed vocabularies, so a single request yields exactly the training columns.
+- **No leakage** — `actual_minutes` / `delay_minutes` / `is_delayed` are targets only;
+  `promised_minutes` (the platform's quote) is known at order time and is a valid feature.
+
+📓 **Walkthrough:** [notebooks/01_eda.ipynb](notebooks/01_eda.ipynb) — EDA narrative,
+model justification, and error analysis. &nbsp;📖 **Schema:** [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md).
 
 ---
 
@@ -81,12 +129,16 @@ the order to a lower-risk slot.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt                 # or: conda env create -f environment.yml
 
 python scripts/train.py            # train ETA + delay models -> models/
+python scripts/evaluate.py         # baselines, CV, SHAP, cost sweep -> docs/ (optional)
+python scripts/tune.py             # randomized hyperparameter search (optional)
 make api                           # FastAPI on http://localhost:8000/docs
 make dashboard                     # Streamlit on http://localhost:8501
 ```
+
+A narrated walkthrough lives in [notebooks/01_eda.ipynb](notebooks/01_eda.ipynb).
 
 Send a prediction:
 
@@ -132,7 +184,14 @@ training set.
 
 **Models.** Two XGBoost models ([train.py](src/delivery_delay/models/train.py))
 share the feature matrix; the classifier weights the minority "delayed" class.
-Runs are tracked in **MLflow** (params, metrics, model artifact).
+Runs are tracked in **MLflow**, and each trained bundle is **versioned** (a
+timestamped copy is archived alongside the latest).
+
+**Evaluation.** [evaluate.py](src/delivery_delay/models/evaluate.py) benchmarks
+both models against naive + linear baselines, cross-validates, computes feature
+importance + **SHAP**, and runs a **cost-aware threshold sweep** — writing
+[docs/model_report.md](docs/model_report.md) and the plots above.
+[tune.py](src/delivery_delay/models/tune.py) does a randomized hyperparameter search.
 
 **Serving.** A [FastAPI service](src/delivery_delay/api/main.py) exposes
 `/predict`, `/recommend`, `/model/info`, and Prometheus `/metrics`. The
@@ -150,22 +209,24 @@ and transparently falls back to running the model in-process.
 ```
 src/delivery_delay/
 ├── config.py              # YAML + env config
-├── data/                  # generator, weather client, public loader
+├── data/                  # generator, weather client, public loader + schema validation
 ├── features/              # geo, temporal, build (train/serve parity)
-├── models/                # train, registry, predict
+├── models/                # train, evaluate, tune, registry (versioned), predict
 ├── recommend.py           # optimal-ordering engine
 └── api/                   # FastAPI app, schemas, Prometheus metrics
 dashboard/app.py           # Streamlit decision-support UI
-scripts/                   # train · generate_data · stream_simulator · download_dataset
+scripts/                   # train · evaluate · tune · generate_data · stream_simulator
+notebooks/01_eda.ipynb     # narrated EDA, model justification, error analysis
+docs/                      # DATA_DICTIONARY.md · model_report.md · tuning_report.md · img/
 monitoring/                # Prometheus + Grafana provisioning
 tests/                     # pytest: geo, temporal, features, generator, predict, api, weather
 ```
 
 ## Tech stack
 
-`Python` · `scikit-learn` · `XGBoost` · `MLflow` · `FastAPI` · `Pydantic` ·
-`Streamlit` · `Plotly` · `Prometheus` · `Grafana` · `Docker Compose` ·
-`pytest` · `ruff`/`black` · `GitHub Actions`
+`Python` · `scikit-learn` · `XGBoost` · `SHAP` · `MLflow` · `FastAPI` · `Pydantic` ·
+`Streamlit` · `Plotly` · `matplotlib`/`seaborn` · `Jupyter` · `Prometheus` · `Grafana` ·
+`Docker Compose` · `pytest` · `ruff`/`black` · `GitHub Actions`
 
 ## Cloud-ready
 
@@ -183,7 +244,3 @@ make lint     # ruff
 ```
 
 CI runs lint + format-check + the full suite on Python 3.10/3.11/3.12.
-
-## License
-
-MIT

@@ -110,7 +110,16 @@ def feature_columns(cfg: Config | None = None) -> list[str]:
 
 
 def build_xy(df: pd.DataFrame, cfg: Config | None = None):
-    """Return (X, y_eta, y_delay) from a canonical frame *with targets*."""
+    """Return (X, y_eta, y_delay) from a canonical frame *with targets*.
+
+    Leakage control: the feature matrix ``X`` is produced by ``build_features``,
+    which uses **only information available at order time**. The outcome columns
+    (``actual_minutes``, ``delay_minutes``, ``is_delayed``) are returned as
+    targets and never enter ``X``. ``promised_minutes`` *is* a feature, and
+    legitimately so: it is the platform's quoted ETA, known when the order is
+    placed -- the delay model essentially learns when reality will overrun that
+    optimistic quote. It is a request-time prior, not future information.
+    """
     cfg = cfg or load_config()
     X = build_features(df, cfg)
     X = X.reindex(columns=feature_columns(cfg), fill_value=0.0)
