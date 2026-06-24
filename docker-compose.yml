@@ -1,0 +1,82 @@
+# Food Delivery Delay Prediction — local stack.
+#
+#   1. Train a model into the shared ./models volume:
+#        docker compose run --rm trainer
+#   2. Start the API + dashboard:
+#        docker compose up api dashboard
+#   3. (optional) Add monitoring:
+#        docker compose --profile monitoring up
+#
+# API:        http://localhost:8000/docs
+# Dashboard:  http://localhost:8501
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000  (admin/admin)
+
+services:
+  api:
+    build: .
+    image: delivery-delay:latest
+    command: uvicorn delivery_delay.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      - MODEL_DIR=/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build: .
+    image: delivery-delay:latest
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models
+    environment:
+      - DELIVERY_API_URL=http://api:8000
+      - MODEL_DIR=/app/models
+    depends_on:
+      - api
+
+  # One-shot training job: writes the model bundle into the shared volume.
+  trainer:
+    build: .
+    image: delivery-delay:latest
+    command: python scripts/train.py --source hybrid --no-mlflow
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      - MODEL_DIR=/app/models
+    profiles: ["train"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    profiles: ["monitoring"]
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    profiles: ["monitoring"]
+    depends_on:
+      - prometheus

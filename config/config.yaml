@@ -1,0 +1,66 @@
+# Central configuration for the Food Delivery Delay Prediction System.
+# Environment variables (see .env.example) override the matching keys at load time.
+
+project:
+  name: food-delivery-delay-prediction
+  random_seed: 42
+
+paths:
+  data_raw: data/raw
+  data_processed: data/processed
+  model_dir: models
+
+# --- City the simulation/serving is anchored to (drives geo + weather) ---
+city:
+  name: Boston
+  # bounding box used to scatter restaurants & customers
+  lat_min: 42.31
+  lat_max: 42.39
+  lon_min: -71.12
+  lon_max: -71.03
+  timezone: America/New_York
+
+# --- Synthetic data generation ---
+generator:
+  n_restaurants: 80
+  n_drivers: 120
+  n_orders: 40000
+  # baseline minutes added on top of travel time
+  base_prep_minutes: 12
+  # the platform's quote is optimistic: prep + nominal travel + this small buffer
+  promise_buffer_minutes: 4
+  delay_threshold_minutes: 8    # label: delayed if (actual - promised) > threshold
+
+# --- Feature engineering ---
+features:
+  # local peak windows (24h clock); orders inside these see surge effects
+  lunch_peak: [11, 14]
+  dinner_peak: [17, 21]
+  avg_speed_kmph: 22.0          # used for naive travel-time prior
+
+# --- Models ---
+models:
+  test_size: 0.2
+  eta_regressor:
+    name: eta_minutes
+    n_estimators: 400
+    max_depth: 7
+    learning_rate: 0.05
+    subsample: 0.9
+    colsample_bytree: 0.9
+  delay_classifier:
+    name: delay_probability
+    n_estimators: 400
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.9
+    colsample_bytree: 0.9
+    # decision threshold for "high delay risk" recommendation
+    high_risk_threshold: 0.5
+
+# --- Recommendation engine ---
+recommend:
+  # scan the next N hours to suggest the best time to order
+  lookahead_hours: 6
+  # acceptable delay probability for a "good time to order"
+  acceptable_delay_prob: 0.25
